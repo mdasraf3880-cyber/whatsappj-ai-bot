@@ -1,18 +1,19 @@
-import pkg from 'whatsapp-web.js';
-const { Client, LocalAuth } = pkg;
-import qrcodeTerminal from 'qrcode-terminal';
+import makeWASocket, {
+  useMultiFileAuthState,
+  DisconnectReason,
+  fetchLatestBaileysVersion
+} from '@whiskeysockets/baileys';
 import QRCode from 'qrcode';
+import pino from 'pino';
 import express from 'express';
 import dotenv from 'dotenv';
-import fs from 'fs';
 
 dotenv.config();
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
 let qrDataUrl = '';
 let isReady = false;
-let botStatus = 'সফলভাবে সংযুক্ত (Connected ✅)';
-let botActive = true;
+let botStatus = 'শুরু হচ্ছে... (Starting)';
 
 const recentReplies = new Map();
 const COOLDOWN_SECONDS = 3;
@@ -86,24 +87,20 @@ const FRIENDS = {
   }
 };
 
-function matchesFriend(contact, msg, friend) {
-  const cleanFrom = (msg.from || '').replace(/\D/g, '');
-  const cleanNumber = (contact.number || '').replace(/\D/g, '');
-  const target = friend.phoneSuffix;
-
-  if (cleanFrom.endsWith(target) || cleanNumber.endsWith(target)) {
+function matchesFriend(senderJid, pushName, friend) {
+  const cleanFrom = (senderJid || '').replace(/\D/g, '');
+  if (cleanFrom.endsWith(friend.phoneSuffix)) {
     return true;
   }
-  const name = ((contact.name || '') + ' ' + (contact.pushname || '')).toLowerCase();
+  const name = (pushName || '').toLowerCase();
   return name.includes(friend.name.toLowerCase());
 }
 
-function getCustomResponse(senderName, contact, msg) {
-  const messageBody = (msg.body || '').trim().toLowerCase();
-  const isAudioOrVoice = msg.type === 'ptt' || msg.type === 'audio' || msg.hasMedia && (msg.type === 'ptt' || msg.type === 'audio');
+function getCustomResponse(pushName, senderJid, messageText, isAudio) {
+  const text = (messageText || '').trim().toLowerCase();
 
-  if (matchesFriend(contact, msg, FRIENDS.IMON)) {
-    if (isAudioOrVoice) {
+  if (matchesFriend(senderJid, pushName, FRIENDS.IMON)) {
+    if (isAudio) {
       const { item, index } = getRandomItem(FRIENDS.IMON.voiceReplies, FRIENDS.IMON.lastVoiceIndex);
       FRIENDS.IMON.lastVoiceIndex = index;
       return item;
@@ -113,8 +110,8 @@ function getCustomResponse(senderName, contact, msg) {
     return item;
   }
 
-  if (matchesFriend(contact, msg, FRIENDS.IMTIAZ)) {
-    if (isAudioOrVoice) {
+  if (matchesFriend(senderJid, pushName, FRIENDS.IMTIAZ)) {
+    if (isAudio) {
       const { item, index } = getRandomItem(FRIENDS.IMTIAZ.voiceReplies, FRIENDS.IMTIAZ.lastVoiceIndex);
       FRIENDS.IMTIAZ.lastVoiceIndex = index;
       return item;
@@ -124,36 +121,36 @@ function getCustomResponse(senderName, contact, msg) {
     return item;
   }
 
-  if (isAudioOrVoice) {
+  if (isAudio) {
     return 'ধন্যবাদ আপনার ভয়েস মেসেজের জন্য। আশরাফুল ভাই এই মুহূর্তে ব্যস্ত আছেন, উনি এসে আপনার ভয়েস শুনে উত্তর দেবেন।';
   }
 
   if (
-    messageBody.includes('কি কাজ') || messageBody.includes('কী কাজ') ||
-    messageBody.includes('কি কি কাজ') || messageBody.includes('কী কী কাজ') ||
-    messageBody.includes('বিক্রি') || messageBody.includes('bikri') ||
-    messageBody.includes('কাজ করে') || messageBody.includes('ব্যবসা')
+    text.includes('কি কাজ') || text.includes('কী কাজ') ||
+    text.includes('কি কি কাজ') || text.includes('কী কী কাজ') ||
+    text.includes('বিক্রি') || text.includes('bikri') ||
+    text.includes('কাজ করে') || text.includes('ব্যবসা')
   ) {
     return 'আশরাফুল ভাই মূলত একজন স্টুডেন্ট। উনি পড়াশোনা করছেন এবং আপাতত অন্য কোনো কাজ বা কেনাবেচা করেন না। উনি ফ্রি হলে আপনার সাথে কথা বলবেন।';
   }
 
   if (
-    messageBody.includes('কেমন আছো') || messageBody.includes('কেমন আছেন') ||
-    messageBody.includes('kemon acho') || messageBody.includes('kemon achen')
+    text.includes('কেমন আছো') || text.includes('কেমন আছেন') ||
+    text.includes('kemon acho') || text.includes('kemon achen')
   ) {
     return `আলহামদুলিল্লাহ, ভালো আছি। আপনি কেমন আছেন? ${getAshrafulRoutine()}`;
   }
 
   if (
-    messageBody.includes('সালাম') || messageBody.includes('salam') ||
-    messageBody.includes('assalamu') || messageBody.includes('আসসালামু')
+    text.includes('সালাম') || text.includes('salam') ||
+    text.includes('assalamu') || text.includes('আসসালামু')
   ) {
     return `ওয়ালাইকুম আসসালাম। মেসেজ দেওয়ার জন্য ধন্যবাদ। ${getAshrafulRoutine()}`;
   }
 
   if (
-    messageBody.includes('hi') || messageBody.includes('hello') ||
-    messageBody.includes('hey') || messageBody.includes('হ্যালো') || messageBody.includes('হাই')
+    text.includes('hi') || text.includes('hello') ||
+    text.includes('hey') || text.includes('হ্যালো') || text.includes('হাই')
   ) {
     return `হ্যালো! নক দেওয়ার জন্য ধন্যবাদ। আমি আশরাফুল ভাইয়ের অটো-অ্যাসিস্ট্যান্ট। ${getAshrafulRoutine()}`;
   }
@@ -197,111 +194,89 @@ app.get('/', (req, res) => {
   `);
 });
 
-app.listen(PORT, () => {
-  console.log(`🌐 ওয়েব সার্ভার চলছে: http://localhost:${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`🌐 ওয়েব সার্ভার চলছে: http://0.0.0.0:${PORT}`);
 });
 
-const puppeteerArgs = {
-  headless: true,
-  args: [
-    '--no-sandbox',
-    '--disable-setuid-sandbox',
-    '--disable-dev-shm-usage',
-    '--no-first-run',
-    '--disable-extensions'
-  ]
-};
+async function startBot() {
+  const { state, saveCreds } = await useMultiFileAuthState('baileys_auth');
+  const { version } = await fetchLatestBaileysVersion();
 
-const chromePath = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
-if (fs.existsSync(chromePath)) {
-  puppeteerArgs.executablePath = chromePath;
+  const sock = makeWASocket({
+    version,
+    auth: state,
+    logger: pino({ level: 'silent' }),
+    printQRInTerminal: true,
+    browser: ['Ubuntu', 'Chrome', '20.0.04']
+  });
+
+  sock.ev.on('creds.update', saveCreds);
+
+  sock.ev.on('connection.update', async (update) => {
+    const { connection, lastDisconnect, qr } = update;
+
+    if (qr) {
+      console.log('📱 নতুন QR কোড তৈরি হয়েছে (Render Web Interface-এ দেখা যাচ্ছে)');
+      botStatus = '📱 কিউআর কোড স্ক্যান করুন (Scan QR)';
+      qrDataUrl = await QRCode.toDataURL(qr);
+    }
+
+    if (connection === 'close') {
+      const statusCode = (lastDisconnect?.error)?.output?.statusCode;
+      const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+      console.log(`⚠️ সংযোগ বিচ্ছিন্ন হয়েছে (Status: ${statusCode})। রিকানেক্ট করা হচ্ছে: ${shouldReconnect}`);
+      isReady = false;
+      botStatus = 'পুনরায় সংযোগ স্থাপন করা হচ্ছে... (Reconnecting)';
+      if (shouldReconnect) {
+        startBot();
+      }
+    } else if (connection === 'open') {
+      console.log('✅ হোয়াটসঅ্যাপ সফলভাবে সংযুক্ত হয়েছে!');
+      isReady = true;
+      botStatus = 'সফলভাবে সংযুক্ত (Connected ✅)';
+      qrDataUrl = '';
+    }
+  });
+
+  sock.ev.on('messages.upsert', async (m) => {
+    try {
+      if (m.type !== 'notify') return;
+      for (const msg of m.messages) {
+        if (!msg.message || msg.key.fromMe) continue;
+
+        const sender = msg.key.remoteJid;
+        if (!sender || sender.endsWith('@g.us') || sender === 'status@broadcast') continue;
+
+        const now = Date.now();
+        if (recentReplies.has(sender)) {
+          const lastTime = recentReplies.get(sender);
+          if (now - lastTime < COOLDOWN_SECONDS * 1000) continue;
+        }
+
+        const pushName = msg.pushName || '';
+        const messageType = Object.keys(msg.message)[0];
+        const isAudio = messageType === 'audioMessage';
+
+        let text = '';
+        if (messageType === 'conversation') {
+          text = msg.message.conversation;
+        } else if (messageType === 'extendedTextMessage') {
+          text = msg.message.extendedTextMessage?.text || '';
+        } else if (messageType === 'imageMessage') {
+          text = msg.message.imageMessage?.caption || '';
+        }
+
+        const reply = getCustomResponse(pushName, sender, text, isAudio);
+        if (reply) {
+          recentReplies.set(sender, now);
+          console.log(`💬 উত্তর পাঠানো হচ্ছে [${pushName || sender}]: ${reply}`);
+          await sock.sendMessage(sender, { text: reply }, { quoted: msg });
+        }
+      }
+    } catch (err) {
+      console.error('মেসেজ হ্যান্ডলিং এ সমস্যা:', err);
+    }
+  });
 }
 
-const client = new Client({
-  authStrategy: new LocalAuth({ dataPath: './.wwebjs_auth' }),
-  authTimeoutMs: 120000,
-  puppeteer: puppeteerArgs
-});
-
-process.on('uncaughtException', (err) => {
-  console.error('⚠️ সিস্টেম ত্রুটি (ধরা হয়েছে):', err.message);
-});
-
-process.on('unhandledRejection', (reason) => {
-  console.error('⚠️ আনহ্যান্ডেলড রিজেকশন:', reason?.message || reason);
-});
-
-client.on('qr', async (qr) => {
-  botStatus = 'QR কোড স্ক্যান করুন (Waiting for Scan)';
-  qrDataUrl = await QRCode.toDataURL(qr, { width: 300 });
-  console.log('\n📱 WhatsApp -> Linked Devices -> স্ক্যান করুন:');
-  qrcodeTerminal.generate(qr, { small: true });
-});
-
-client.on('ready', () => {
-  isReady = true;
-  qrDataUrl = '';
-  botStatus = 'সফলভাবে সংযুক্ত (Connected ✅)';
-  console.log('✅ আশরাফুল ইসলামের এআই অ্যাসিস্ট্যান্ট পুরোদমে চালু হয়েছে!');
-});
-
-client.on('authenticated', () => {
-  botStatus = 'লগইন অনুমোদিত হয়েছে...';
-  console.log('🔑 লগইন সংরক্ষিত রয়েছে (Authenticated)।');
-});
-
-client.on('disconnected', (reason) => {
-  isReady = false;
-  botStatus = 'সংযোগ বিচ্ছিন্ন হয়েছে';
-  console.log('⚠️ সংযোগ বিচ্ছিন্ন হয়েছে:', reason);
-  setTimeout(() => client.initialize(), 5000);
-});
-
-client.on('message', async (msg) => {
-  try {
-    if (msg.fromMe) return;
-    if (!botActive) return;
-    if (msg.from.endsWith('@g.us')) return;
-    if (msg.from === 'status@broadcast') return;
-
-    const contact = await msg.getContact();
-    const senderName = contact.pushname || contact.name || contact.number || 'বন্ধু';
-
-    console.log(`\n📩 নতুন মেসেজ এসেছে [${senderName}]: ${msg.hasMedia ? `[${msg.type}]` : msg.body}`);
-
-    const now = Date.now();
-    const lastReply = recentReplies.get(msg.from);
-    if (lastReply && (now - lastReply) < COOLDOWN_SECONDS * 1000) {
-      return;
-    }
-
-    const reply = getCustomResponse(senderName, contact, msg);
-
-    const chat = await msg.getChat();
-    await chat.sendStateTyping();
-    await new Promise((r) => setTimeout(r, 1000));
-    await chat.clearState();
-
-    await msg.reply(reply);
-    recentReplies.set(msg.from, now);
-    console.log(`📤 উত্তর পাঠানো হয়েছে [${senderName}]: "${reply}"`);
-
-  } catch (err) {
-    console.error('মেসেজ প্রসেসিং ত্রুটি:', err.message);
-  }
-});
-
-client.on('message_create', async (msg) => {
-  if (msg.fromMe) {
-    const text = (msg.body || '').trim().toLowerCase();
-    if (text === '#off') {
-      botActive = false;
-      console.log('🔴 আশরাফুল ভাই ফোন থেকে বট বন্ধ করেছেন (#off)');
-    } else if (text === '#on') {
-      botActive = true;
-      console.log('🟢 আশরাফুল ভাই ফোন থেকে বট চালু করেছেন (#on)');
-    }
-  }
-});
-
-client.initialize();
+startBot().catch(console.error);
