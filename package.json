@@ -1,17 +1,17 @@
 {
   "name": "whatsapp-ai-bot",
   "version": "1.0.0",
-  "description": "WhatsApp AI Auto-Reply Bot",
+  "description": "WhatsApp AI Auto-Reply Bot powered by Baileys",
   "main": "index.js",
   "type": "module",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.13",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
-    "qrcode": "^1.5.4",
-    "qrcode-terminal": "^0.12.0",
-    "whatsapp-web.js": "^1.26.0"
+    "pino": "^9.6.0",
+    "qrcode": "^1.5.4"
   }
 }
